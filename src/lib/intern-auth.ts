@@ -1,6 +1,10 @@
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3001";
+// In production the Express handler is served by Vercel under /api.  Keeping
+// this relative also makes the portal work on preview deployments and custom
+// domains instead of trying to contact the visitor's localhost.
+const API_BASE = "/api";
 const TOKEN_KEY = "belvo_intern_token";
 const EMAIL_KEY = "belvo_intern_email";
+const OTP_CHALLENGE_KEY = "belvo_intern_otp_challenge";
 
 // ── Token Management ─────────────────────────────────
 
@@ -15,6 +19,7 @@ function setToken(token: string): void {
 export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(EMAIL_KEY);
+  sessionStorage.removeItem(OTP_CHALLENGE_KEY);
 }
 
 export function getEmail(): string | null {
@@ -60,7 +65,24 @@ async function api<T>(
     headers,
   });
 
-  const data = await res.json();
+  const contentType = res.headers.get("content-type") || "";
+  let data: any = {};
+
+  if (contentType.includes("application/json")) {
+    try {
+      data = await res.json();
+    } catch {
+      data = {};
+    }
+  } else {
+    if (!res.ok) {
+      if (res.status === 503) {
+        throw new Error("Unable to send OTP right now. Please try again later.");
+      }
+      throw new Error(`Server returned error (${res.status}). Please try again.`);
+    }
+    throw new Error("Unexpected response format from server.");
+  }
 
   if (!res.ok) {
     throw new Error(data.message || "Request failed");
@@ -72,43 +94,37 @@ async function api<T>(
 // ── OTP Auth ─────────────────────────────────────────
 
 export async function sendOtp(email: string): Promise<void> {
-  try {
-    await api<{ success: boolean; message: string }>("/intern/send-otp", {
-      method: "POST",
-      body: JSON.stringify({ email }),
-    });
-  } catch {
-    // Backend unreachable — offline mode: silently accept
-  }
+  const data = await api<{ success: boolean; message: string; otpChallenge: string }>("/intern/send-otp", {
+    method: "POST",
+    body: JSON.stringify({ email: email.trim().toLowerCase() }),
+  });
+  sessionStorage.setItem(OTP_CHALLENGE_KEY, data.otpChallenge);
 }
 
 export async function verifyOtp(
   email: string,
   otp: string
 ): Promise<{ token: string; email: string }> {
-  try {
-    const data = await api<{
-      success: boolean;
-      token: string;
-      email: string;
-    }>("/intern/verify-otp", {
-      method: "POST",
-      body: JSON.stringify({ email, otp }),
-    });
-
-    setToken(data.token);
-    setEmail(data.email);
-    clearChecklist();
-
-    return { token: data.token, email: data.email };
-  } catch {
-    // Backend unreachable — offline mode: accept any 6-digit OTP
-    const mockToken = btoa(JSON.stringify({ email, exp: Math.floor(Date.now() / 1000) + 86400 }));
-    setToken(mockToken);
-    setEmail(email);
-    clearChecklist();
-    return { token: mockToken, email };
+  const otpChallenge = sessionStorage.getItem(OTP_CHALLENGE_KEY);
+  if (!otpChallenge) {
+    throw new Error("OTP session expired. Please request a new code.");
   }
+
+  const data = await api<{
+    success: boolean;
+    token: string;
+    email: string;
+  }>("/intern/verify-otp", {
+    method: "POST",
+    body: JSON.stringify({ email: email.trim().toLowerCase(), otp, otpChallenge }),
+  });
+
+  setToken(data.token);
+  setEmail(data.email);
+  sessionStorage.removeItem(OTP_CHALLENGE_KEY);
+  clearChecklist();
+
+  return { token: data.token, email: data.email };
 }
 
 // ── Checklist (per-device via localStorage) ──────────

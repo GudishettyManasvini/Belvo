@@ -99,6 +99,8 @@ export default function InternChecklist() {
   const [loading, setLoading] = useState(true);
   const [activeForm, setActiveForm] = useState<"offer" | "idcard" | "nda" | null>(null);
   const [showWelcome, setShowWelcome] = useState(false);
+  const [hasDismissedCompletion, setHasDismissedCompletion] = useState(false);
+  const [showCompletionModal, setShowCompletionModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -139,6 +141,15 @@ export default function InternChecklist() {
     status.linkedin &&
     status.whatsapp &&
     status.nda;
+
+  useEffect(() => {
+    if (allComplete && !hasDismissedCompletion) {
+      setShowCompletionModal(true);
+    } else if (!allComplete) {
+      setShowCompletionModal(false);
+      setHasDismissedCompletion(false);
+    }
+  }, [allComplete, hasDismissedCompletion]);
 
   const handleOfferLetterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -852,6 +863,176 @@ export default function InternChecklist() {
           Proceed
         </button>
       </motion.div>
+
+      {/* Completion Modal */}
+      <AnimatePresence>
+        {showCompletionModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0, 0, 0, 0.8)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 1000,
+              padding: "24px",
+              backdropFilter: "blur(12px)",
+            }}
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                setShowCompletionModal(false);
+                setHasDismissedCompletion(true);
+              }
+            }}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
+              style={{
+                width: "100%",
+                maxWidth: "440px",
+                background: "#111118",
+                border: "1px solid rgba(123, 47, 190, 0.4)",
+                borderRadius: "24px",
+                padding: "36px 28px",
+                position: "relative",
+                boxShadow: "0 0 50px rgba(123, 47, 190, 0.3), 0 20px 40px rgba(0, 0, 0, 0.8)",
+                textAlign: "center",
+              }}
+            >
+              {/* Close Icon Button */}
+              <button
+                onClick={() => {
+                  setShowCompletionModal(false);
+                  setHasDismissedCompletion(true);
+                }}
+                style={{
+                  position: "absolute",
+                  top: "18px",
+                  right: "18px",
+                  background: "rgba(255, 255, 255, 0.05)",
+                  border: "1px solid rgba(255, 255, 255, 0.1)",
+                  borderRadius: "50%",
+                  width: "32px",
+                  height: "32px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  color: "rgba(255, 255, 255, 0.6)",
+                  cursor: "pointer",
+                  transition: "all 0.2s",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "rgba(255, 255, 255, 0.1)";
+                  e.currentTarget.style.color = "#fff";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "rgba(255, 255, 255, 0.05)";
+                  e.currentTarget.style.color = "rgba(255, 255, 255, 0.6)";
+                }}
+              >
+                <X size={18} />
+              </button>
+
+              {/* Icon Badge */}
+              <div
+                style={{
+                  width: "72px",
+                  height: "72px",
+                  margin: "0 auto 20px",
+                  borderRadius: "50%",
+                  background: "linear-gradient(135deg, rgba(123, 47, 190, 0.25), rgba(245, 67, 151, 0.25))",
+                  border: "1px solid rgba(123, 47, 190, 0.5)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  boxShadow: "0 0 24px rgba(123, 47, 190, 0.4)",
+                }}
+              >
+                <CheckCircle2 size={38} style={{ color: VIOLET.light }} />
+              </div>
+
+              {/* Title */}
+              <h2
+                style={{
+                  fontFamily: "'Inter', sans-serif",
+                  fontSize: "1.35rem",
+                  fontWeight: 700,
+                  color: "#fff",
+                  margin: "0 0 12px",
+                  letterSpacing: "-0.01em",
+                }}
+              >
+                🎉 Onboarding Completed!
+              </h2>
+
+              {/* Body Text */}
+              <p
+                style={{
+                  fontFamily: "'Inter', sans-serif",
+                  fontSize: "0.92rem",
+                  fontWeight: 600,
+                  color: "rgba(255, 255, 255, 0.95)",
+                  margin: "0 0 8px",
+                  lineHeight: 1.5,
+                }}
+              >
+                Your onboarding process has been successfully completed.
+              </p>
+
+              <p
+                style={{
+                  fontFamily: "'Inter', sans-serif",
+                  fontSize: "0.82rem",
+                  color: "rgba(255, 255, 255, 0.5)",
+                  margin: "0 0 28px",
+                  lineHeight: 1.5,
+                }}
+              >
+                You may now leave this page. Thank you for completing all the required steps.
+              </p>
+
+              {/* Action Button */}
+              <button
+                onClick={() => {
+                  setShowCompletionModal(false);
+                  setHasDismissedCompletion(true);
+                }}
+                style={{
+                  width: "100%",
+                  padding: "14px",
+                  background: `linear-gradient(135deg, ${VIOLET.primary}, ${VIOLET.light})`,
+                  border: "none",
+                  borderRadius: "12px",
+                  color: "#fff",
+                  fontFamily: "'Inter', sans-serif",
+                  fontWeight: 600,
+                  fontSize: "0.92rem",
+                  cursor: "pointer",
+                  transition: "all 0.2s",
+                  boxShadow: `0 0 20px ${VIOLET.glow}`,
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.opacity = "0.9";
+                  e.currentTarget.style.transform = "translateY(-1px)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.opacity = "1";
+                  e.currentTarget.style.transform = "translateY(0)";
+                }}
+              >
+                Done / Close
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Form Modal */}
       <AnimatePresence>

@@ -12,9 +12,11 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import multer from "multer";
 import nodemailer from "nodemailer";
+import { createHash, randomInt } from "crypto";
 import { TOOLS_CATALOG } from "./data/tools.js";
 import { authenticateToken, getJWTSecret, authLimiter, otpLimiter } from "./middleware/auth.js";
 import { getDb, isDbReady } from "./db.js";
+import { emailTransporter, SMTP_USER, SMTP_PASS, HR_EMAIL, getEmailConfigurationError, logEmailConfiguration, logEmailError } from "./email.js";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -23,6 +25,15 @@ const PORT = process.env.PORT || 3001;
 app.use(helmet());
 app.use(cors());
 app.use(express.json());
+
+// Normalise /api/intern requests so both Vite proxy (/api/intern/...) and Express (/intern/...) reach handlers
+app.use((req, _res, next) => {
+  if (req.url === "/api/intern" || req.url.startsWith("/api/intern/")) {
+    req.url = req.url.slice(4);
+  }
+  next();
+});
+
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // ── Multer setup for image uploads ─────────────────────
@@ -55,20 +66,7 @@ const ADMIN_USERNAME = process.env.ADMIN_USERNAME;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
 // ── In-memory stores for intern OTP + checklist ───────
-const otpStore = new Map();       // email → { otp, expiresAt }
 const checklistStore = new Map(); // email → { watchedLms, offerLetter, idCard }
-
-// ── Nodemailer config (reused from api/register.js) ───
-const SMTP_USER = process.env.SMTP_USER;
-const SMTP_PASS = process.env.SMTP_PASS;
-const HR_EMAIL = process.env.HR_EMAIL;
-
-const emailTransporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: false,
-  auth: { user: SMTP_USER, pass: SMTP_PASS },
-});
 
 // ── Auth Routes ────────────────────────────────────────
 app.post("/admin/login", authLimiter, async (req, res) => {
@@ -98,32 +96,42 @@ app.post("/admin/login", authLimiter, async (req, res) => {
 
 // ── Intern OTP Auth Routes ───────────────────────────
 
-const ALLOWED_INTERN_EMAIL = process.env.ALLOWED_INTERN_EMAIL;
+const BELVO_INTERN_EMAIL = /^[a-z0-9._-]+\.belvo@gmail\.com$/i;
+
+function createOtpHash(email, otp) {
+  return createHash("sha256")
+    .update(`${email.toLowerCase()}:${otp}:${getJWTSecret()}`)
+    .digest("hex");
+}
 
 // POST /intern/send-otp — Generate and send OTP to email
 app.post("/intern/send-otp", otpLimiter, async (req, res) => {
   try {
-    const { email } = req.body;
-
-    if (!email || !email.includes("@")) {
-      return res.status(400).json({ success: false, message: "Valid email is required" });
+    const emailConfigurationError = getEmailConfigurationError();
+    if (emailConfigurationError) {
+      console.error("Email configuration error:", emailConfigurationError);
+      return res.status(503).json({ success: false, message: "Unable to send OTP right now. Please try again later." });
     }
 
-    if (email.toLowerCase() !== ALLOWED_INTERN_EMAIL) {
-      return res.status(403).json({ success: false, message: "This email is not authorized for intern access" });
+    const { email } = req.body;
+
+    const normalizedEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
+    if (!BELVO_INTERN_EMAIL.test(normalizedEmail)) {
+      return res.status(403).json({ success: false, message: "Please use your registered Belvo email address (name.belvo@gmail.com)." });
     }
 
     // Generate 6-digit OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = Date.now() + 60000; // 60 seconds
-
-    // Store OTP
-    otpStore.set(email.toLowerCase(), { otp, expiresAt });
+    const otp = randomInt(100000, 1000000).toString();
+    const otpChallenge = jwt.sign(
+      { type: "intern-otp", email: normalizedEmail, otpHash: createOtpHash(normalizedEmail, otp) },
+      getJWTSecret(),
+      { expiresIn: "5m" }
+    );
 
     // Send OTP email
     await emailTransporter.sendMail({
       from: `"BELVO Intern Portal" <${SMTP_USER}>`,
-      to: email,
+      to: normalizedEmail,
       subject: "Your BELVO Verification Code",
       html: `
         <div style="font-family: Inter, Arial, sans-serif; max-width: 480px; margin: auto; background: #fff; border-radius: 16px; overflow: hidden; box-shadow: 0 2px 12px rgba(0,0,0,0.08);">
@@ -134,7 +142,7 @@ app.post("/intern/send-otp", otpLimiter, async (req, res) => {
           <div style="padding: 32px; text-align: center;">
             <p style="color: #555; font-size: 14px; margin: 0 0 16px;">Your 6-digit verification code is:</p>
             <div style="font-size: 36px; font-weight: 700; letter-spacing: 8px; color: #7B2FBE; padding: 16px; background: #f5f0ff; border-radius: 12px; margin: 0 0 16px;">${otp}</div>
-            <p style="color: #999; font-size: 12px; margin: 0;">This code expires in 1 minute.</p>
+            <p style="color: #999; font-size: 12px; margin: 0;">This code expires in 5 minutes.</p>
             <p style="color: #999; font-size: 12px; margin: 8px 0 0;">If you didn't request this, please ignore this email.</p>
           </div>
           <div style="text-align: center; padding: 16px; background: #fafafa; font-size: 12px; color: #aaa;">BELVO — belvo.buzz</div>
@@ -142,48 +150,47 @@ app.post("/intern/send-otp", otpLimiter, async (req, res) => {
       `,
     });
 
-    res.json({ success: true, message: "OTP sent successfully" });
+    res.json({ success: true, message: "OTP sent successfully to your registered email address.", otpChallenge });
   } catch (err) {
-    console.error("Send OTP error:", err);
-    res.status(500).json({ success: false, message: "Failed to send OTP. Please try again." });
+    logEmailError("Send OTP error", err);
+    res.status(500).json({ success: false, message: "Unable to send OTP right now. Please try again later." });
   }
 });
 
 // POST /intern/verify-otp — Verify OTP and return JWT
 app.post("/intern/verify-otp", otpLimiter, async (req, res) => {
   try {
-    const { email, otp } = req.body;
+    const { email, otp, otpChallenge } = req.body;
+    const normalizedEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
 
-    if (!email || !otp) {
-      return res.status(400).json({ success: false, message: "Email and OTP are required" });
+    if (!normalizedEmail || !otp || !otpChallenge) {
+      return res.status(400).json({ success: false, message: "Email, OTP, and OTP session are required" });
     }
 
-    const stored = otpStore.get(email.toLowerCase());
-
-    if (!stored) {
-      return res.status(400).json({ success: false, message: "No OTP found. Please request a new one." });
+    let challenge;
+    try {
+      challenge = jwt.verify(otpChallenge, getJWTSecret());
+    } catch {
+      return res.status(400).json({ success: false, message: "OTP has expired. Please request a new OTP." });
     }
 
-    if (Date.now() > stored.expiresAt) {
-      otpStore.delete(email.toLowerCase());
-      return res.status(400).json({ success: false, message: "OTP has expired. Please request a new one." });
-    }
-
-    if (stored.otp !== otp.toString()) {
+    if (
+      challenge.type !== "intern-otp" ||
+      challenge.email !== normalizedEmail ||
+      challenge.otpHash !== createOtpHash(normalizedEmail, otp.toString())
+    ) {
       return res.status(400).json({ success: false, message: "Invalid OTP. Please try again." });
     }
 
-    // OTP valid — delete from store and issue JWT
-    otpStore.delete(email.toLowerCase());
-    checklistStore.delete(email.toLowerCase());
+    checklistStore.delete(normalizedEmail);
 
     const token = jwt.sign(
-      { email: email.toLowerCase(), role: "intern" },
+      { email: normalizedEmail, role: "intern" },
       getJWTSecret(),
       { expiresIn: "7d" }
     );
 
-    res.json({ success: true, token, email: email.toLowerCase() });
+    res.json({ success: true, token, email: normalizedEmail });
   } catch (err) {
     console.error("Verify OTP error:", err);
     res.status(500).json({ success: false, message: "Internal server error" });
@@ -1156,6 +1163,10 @@ app.post("/api/book-call", async (req, res) => {
 });
 
 // ── Error handling ─────────────────────────────────────
+app.use((req, res) => {
+  res.status(404).json({ success: false, message: "Route not found" });
+});
+
 app.use((err, req, res, next) => {
   console.error("Unhandled error:", err);
   res.status(500).json({ success: false, message: "Internal server error" });
@@ -1167,6 +1178,7 @@ export default app;
 // ── Start (local only) ─────────────────────────────────
 if (!process.env.VERCEL) {
   app.listen(PORT, async () => {
+    logEmailConfiguration();
     const ready = await isDbReady();
     console.log(`\n  ✦ BELVO API server running on http://localhost:${PORT}`);
     console.log(`  ✦ Database: ${ready ? "✅ Connected" : "⚠️  Not configured (set MONGODB_URI env var)"}`);

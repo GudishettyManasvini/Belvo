@@ -40,7 +40,9 @@ export default function InternLogin() {
     return () => clearTimeout(timer);
   }, [countdown]);
 
-  const ALLOWED_EMAIL = "intern.belvo@gmail.com";
+  // Company intern accounts follow this format, for example
+  // manasvini.belvo@gmail.com, aaryan.belvo@gmail.com, etc.
+  const BELVO_INTERN_EMAIL = /^[a-z0-9._-]+\.belvo@gmail\.com$/i;
 
   const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -49,8 +51,8 @@ export default function InternLogin() {
       return;
     }
 
-    if (email.toLowerCase() !== ALLOWED_EMAIL) {
-      setError("Incorrect email address. Please use registered email address.");
+    if (!BELVO_INTERN_EMAIL.test(email.trim())) {
+      setError("Please use your registered Belvo email address (name.belvo@gmail.com).");
       return;
     }
 
@@ -60,11 +62,11 @@ export default function InternLogin() {
 
     try {
       await sendOtp(email);
-      setSuccess("OTP sent! Check your inbox.");
+      setSuccess("OTP sent successfully to your registered email address.");
       setStep("otp");
       setCountdown(60);
     } catch (err: any) {
-      setError(err.message || "Failed to send OTP");
+      setError(err.message || "Unable to send OTP right now. Please try again later.");
     } finally {
       setLoading(false);
     }
@@ -84,7 +86,7 @@ export default function InternLogin() {
       await verifyOtp(email, otp);
       navigate("/intern/checklist");
     } catch (err: any) {
-      setError(err.message || "Invalid OTP");
+      setError(err.message || "Invalid OTP. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -99,11 +101,11 @@ export default function InternLogin() {
 
     try {
       await sendOtp(email);
-      setSuccess("OTP resent! Check your inbox.");
+      setSuccess("OTP sent successfully to your registered email address.");
       setCountdown(60);
       setOtp("");
     } catch (err: any) {
-      setError(err.message || "Failed to resend OTP");
+      setError(err.message || "Unable to send OTP right now. Please try again later.");
     } finally {
       setLoading(false);
     }

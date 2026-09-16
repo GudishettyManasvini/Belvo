@@ -12,3 +12,4 @@ Thumbs.db
 server/server.log
 server/uploads/
 server/.env
+scratch/

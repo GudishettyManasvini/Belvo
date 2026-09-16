@@ -8,6 +8,7 @@ import bcrypt from "bcryptjs";
 import multer from "multer";
 import nodemailer from "nodemailer";
 import rateLimit from "express-rate-limit";
+import { createHash, randomInt } from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -17,6 +18,7 @@ const __dirname = path.dirname(__filename);
 import { TOOLS_CATALOG } from "../server/data/tools.js";
 import { authenticateToken, getJWTSecret, authLimiter, otpLimiter } from "../server/middleware/auth.js";
 import { getDb, isDbReady } from "../server/db.js";
+import { emailTransporter, SMTP_USER, SMTP_PASS, HR_EMAIL, getEmailConfigurationError, logEmailError } from "../server/email.js";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -25,6 +27,16 @@ app.use(helmet());
 app.use(cors());
 app.use(express.json());
 app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
+
+// The Vercel catch-all function receives requests as /api/intern/..., while
+// local Express development receives /intern/.... Normalise only the intern
+// routes so both environments reach the same handlers.
+app.use((req, _res, next) => {
+  if (req.url === "/api/intern" || req.url.startsWith("/api/intern/")) {
+    req.url = req.url.slice(4);
+  }
+  next();
+});
 
 const storage = multer.diskStorage({
   destination: path.join(__dirname, "..", "uploads"),
@@ -49,19 +61,7 @@ const upload = multer({ storage, fileFilter, limits: { fileSize: 5 * 1024 * 1024
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
-const otpStore = new Map();
 const checklistStore = new Map();
-
-const SMTP_USER = process.env.SMTP_USER;
-const SMTP_PASS = process.env.SMTP_PASS;
-const HR_EMAIL = process.env.HR_EMAIL;
-
-const emailTransporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: false,
-  auth: { user: SMTP_USER, pass: SMTP_PASS },
-});
 
 app.post("/admin/login", authLimiter, async (req, res) => {
   try {
@@ -80,54 +80,72 @@ app.post("/admin/login", authLimiter, async (req, res) => {
   }
 });
 
-const ALLOWED_INTERN_EMAIL = process.env.ALLOWED_INTERN_EMAIL;
+const BELVO_INTERN_EMAIL = /^[a-z0-9._-]+\.belvo@gmail\.com$/i;
+
+function createOtpHash(email, otp) {
+  return createHash("sha256")
+    .update(`${email.toLowerCase()}:${otp}:${getJWTSecret()}`)
+    .digest("hex");
+}
 
 app.post("/intern/send-otp", otpLimiter, async (req, res) => {
   try {
+    const emailConfigurationError = getEmailConfigurationError();
+    if (emailConfigurationError) {
+      console.error("Email configuration error:", emailConfigurationError);
+      return res.status(503).json({ success: false, message: "Unable to send OTP right now. Please try again later." });
+    }
+
     const { email } = req.body;
-    if (!email || !email.includes("@")) {
-      return res.status(400).json({ success: false, message: "Valid email is required" });
+    const normalizedEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
+    if (!BELVO_INTERN_EMAIL.test(normalizedEmail)) {
+      return res.status(403).json({ success: false, message: "Please use your registered Belvo email address (name.belvo@gmail.com)." });
     }
-    if (email.toLowerCase() !== ALLOWED_INTERN_EMAIL) {
-      return res.status(403).json({ success: false, message: "This email is not authorized for intern access" });
-    }
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = Date.now() + 60000;
-    otpStore.set(email.toLowerCase(), { otp, expiresAt });
+    const otp = randomInt(100000, 1000000).toString();
+    // This signed, short-lived challenge replaces in-memory OTP storage so
+    // verification still works when Vercel handles the two requests in
+    // different serverless instances.
+    const otpChallenge = jwt.sign(
+      { type: "intern-otp", email: normalizedEmail, otpHash: createOtpHash(normalizedEmail, otp) },
+      getJWTSecret(),
+      { expiresIn: "5m" }
+    );
     await emailTransporter.sendMail({
       from: `"BELVO Intern Portal" <${SMTP_USER}>`,
-      to: email,
+      to: normalizedEmail,
       subject: "Your BELVO Verification Code",
-      html: `<div style="font-family:Inter,Arial;max-width:480px;margin:auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);"><div style="background:linear-gradient(135deg,#7B2FBE,#9D4EDD);padding:32px 28px;text-align:center;"><h1 style="margin:0;color:#fff;font-size:22px;">Verification Code</h1><p style="margin:6px 0 0;color:rgba(255,255,255,0.75);font-size:13px;">BELVO Intern Portal</p></div><div style="padding:32px;text-align:center;"><p style="color:#555;font-size:14px;margin:0 0 16px;">Your 6-digit verification code is:</p><div style="font-size:36px;font-weight:700;letter-spacing:8px;color:#7B2FBE;padding:16px;background:#f5f0ff;border-radius:12px;margin:0 0 16px;">${otp}</div><p style="color:#999;font-size:12px;margin:0;">This code expires in 1 minute.</p></div><div style="text-align:center;padding:16px;background:#fafafa;font-size:12px;color:#aaa;">BELVO — belvo.buzz</div></div>`,
+      html: `<div style="font-family:Inter,Arial;max-width:480px;margin:auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);"><div style="background:linear-gradient(135deg,#7B2FBE,#9D4EDD);padding:32px 28px;text-align:center;"><h1 style="margin:0;color:#fff;font-size:22px;">Verification Code</h1><p style="margin:6px 0 0;color:rgba(255,255,255,0.75);font-size:13px;">BELVO Intern Portal</p></div><div style="padding:32px;text-align:center;"><p style="color:#555;font-size:14px;margin:0 0 16px;">Your 6-digit verification code is:</p><div style="font-size:36px;font-weight:700;letter-spacing:8px;color:#7B2FBE;padding:16px;background:#f5f0ff;border-radius:12px;margin:0 0 16px;">${otp}</div><p style="color:#999;font-size:12px;margin:0;">This code expires in 5 minutes.</p></div><div style="text-align:center;padding:16px;background:#fafafa;font-size:12px;color:#aaa;">BELVO — belvo.buzz</div></div>`,
     });
-    res.json({ success: true, message: "OTP sent successfully" });
+    res.json({ success: true, message: "OTP sent successfully to your registered email address.", otpChallenge });
   } catch (err) {
-    console.error("Send OTP error:", err);
-    res.status(500).json({ success: false, message: "Failed to send OTP. Please try again." });
+    logEmailError("Send OTP error", err);
+    res.status(500).json({ success: false, message: "Unable to send OTP right now. Please try again later." });
   }
 });
 
 app.post("/intern/verify-otp", otpLimiter, async (req, res) => {
   try {
-    const { email, otp } = req.body;
-    if (!email || !otp) {
-      return res.status(400).json({ success: false, message: "Email and OTP are required" });
+    const { email, otp, otpChallenge } = req.body;
+    const normalizedEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
+    if (!normalizedEmail || !otp || !otpChallenge) {
+      return res.status(400).json({ success: false, message: "Email, OTP, and OTP session are required" });
     }
-    const stored = otpStore.get(email.toLowerCase());
-    if (!stored) {
-      return res.status(400).json({ success: false, message: "No OTP found. Please request a new one." });
+    let challenge;
+    try {
+      challenge = jwt.verify(otpChallenge, getJWTSecret());
+    } catch {
+      return res.status(400).json({ success: false, message: "OTP has expired. Please request a new OTP." });
     }
-    if (Date.now() > stored.expiresAt) {
-      otpStore.delete(email.toLowerCase());
-      return res.status(400).json({ success: false, message: "OTP has expired. Please request a new one." });
-    }
-    if (stored.otp !== otp.toString()) {
+    if (
+      challenge.type !== "intern-otp" ||
+      challenge.email !== normalizedEmail ||
+      challenge.otpHash !== createOtpHash(normalizedEmail, otp.toString())
+    ) {
       return res.status(400).json({ success: false, message: "Invalid OTP. Please try again." });
     }
-    otpStore.delete(email.toLowerCase());
-    checklistStore.delete(email.toLowerCase());
-    const token = jwt.sign({ email: email.toLowerCase(), role: "intern" }, getJWTSecret(), { expiresIn: "7d" });
-    res.json({ success: true, token, email: email.toLowerCase() });
+    checklistStore.delete(normalizedEmail);
+    const token = jwt.sign({ email: normalizedEmail, role: "intern" }, getJWTSecret(), { expiresIn: "7d" });
+    res.json({ success: true, token, email: normalizedEmail });
   } catch (err) {
     console.error("Verify OTP error:", err);
     res.status(500).json({ success: false, message: "Internal server error" });
@@ -766,6 +784,10 @@ app.post("/api/book-call", async (req, res) => {
     console.error("POST /api/book-call error:", err);
     res.status(500).json({ success: false, message: "Failed to save submission" });
   }
+});
+
+app.use((req, res) => {
+  res.status(404).json({ success: false, message: "Route not found" });
 });
 
 app.use((err, req, res, next) => {
