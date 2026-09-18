@@ -21,6 +21,7 @@ import { getDb, isDbReady } from "../server/db.js";
 import { emailTransporter, SMTP_USER, SMTP_PASS, HR_EMAIL, getEmailConfigurationError, logEmailError } from "../server/email.js";
 
 const app = express();
+app.set("trust proxy", 1);
 const PORT = process.env.PORT || 3001;
 
 app.use(helmet());
@@ -96,7 +97,7 @@ app.post("/intern/send-otp", otpLimiter, async (req, res) => {
       return res.status(503).json({ success: false, message: "Unable to send OTP right now. Please try again later." });
     }
 
-    const { email } = req.body;
+    const { email } = req.body || {};
     const normalizedEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
     if (!BELVO_INTERN_EMAIL.test(normalizedEmail)) {
       return res.status(403).json({ success: false, message: "Please use your registered Belvo email address (name.belvo@gmail.com)." });

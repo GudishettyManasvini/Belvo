@@ -7,6 +7,7 @@ export const authLimiter = rateLimit({
   message: { success: false, message: "Too many login attempts. Try again in 15 minutes." },
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { trustProxy: false },
 });
 
 export const otpLimiter = rateLimit({
@@ -15,6 +16,7 @@ export const otpLimiter = rateLimit({
   message: { success: false, message: "Too many OTP requests. Try again in 1 minute." },
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { trustProxy: false },
 });
 
 function getJwtSecret() {

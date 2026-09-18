@@ -7,9 +7,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.join(__dirname, ".env") });
 
-export const SMTP_USER = process.env.SMTP_USER;
-export const SMTP_PASS = process.env.SMTP_PASS;
-export const HR_EMAIL = process.env.HR_EMAIL;
+export const SMTP_USER = (process.env.SMTP_USER || "").trim().replace(/^["']|["']$/g, "");
+export const SMTP_PASS = (process.env.SMTP_PASS || "").trim().replace(/^["']|["']$/g, "").replace(/\s+/g, "");
+export const HR_EMAIL = (process.env.HR_EMAIL || "").trim().replace(/^["']|["']$/g, "");
 
 export const EMAIL_SERVICE_ERROR_MESSAGE =
   "Email service is not configured. Ask the administrator to add a Gmail App Password.";
@@ -44,8 +44,6 @@ export function logEmailError(context, error) {
 }
 
 export const emailTransporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: false,
+  service: "gmail",
   auth: { user: SMTP_USER, pass: SMTP_PASS },
 });
