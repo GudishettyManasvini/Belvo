@@ -11,6 +11,7 @@ import rateLimit from "express-rate-limit";
 import { createHash, randomInt } from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
+import os from "os";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,7 +28,6 @@ const PORT = process.env.PORT || 3001;
 app.use(helmet());
 app.use(cors());
 app.use(express.json());
-app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
 
 // The Vercel catch-all function receives requests as /api/intern/..., while
 // local Express development receives /intern/.... Normalise only the intern
@@ -40,7 +40,7 @@ app.use((req, _res, next) => {
 });
 
 const storage = multer.diskStorage({
-  destination: path.join(__dirname, "..", "uploads"),
+  destination: os.tmpdir(),
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
     const ext = path.extname(file.originalname);
